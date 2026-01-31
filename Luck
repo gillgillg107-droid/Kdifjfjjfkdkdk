@@ -1,0 +1,121 @@
+-- LuckyZoneServer.lua
+-- Put this in ServerScriptService
+-- Requirements: Tag the multiplier parts with the CollectionService tag "LuckyZone"
+-- Config: MULTIPLIER, DURATION (seconds). DURATION = 0 -> permanent
+
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+-- CONFIG
+local MULTIPLIER = 99       -- x99 lucky multiplier
+local DURATION = 300        -- seconds the multiplier lasts (set to 0 for permanent)
+local TOUCH_COOLDOWN = 2    -- seconds between allowed activations per player per zone
+
+local REMOTE_NAME = "LuckyActivated"
+
+-- Ensure remote exists
+local remote = ReplicatedStorage:FindFirstChild(REMOTE_NAME)
+if not remote then
+    remote = Instance.new("RemoteEvent")
+    remote.Name = REMOTE_NAME
+    remote.Parent = ReplicatedStorage
+end
+
+-- Internal state per player
+-- activeTimers[userId] = { cancel = function() end, nextTouchAllowed = os.time()+n }
+local activeTimers = {}
+
+local function applyMultiplier(player, multiplier, duration)
+    if not player or not player.Parent then return end
+    local userId = player.UserId
+    local now = os.time()
+    activeTimers[userId] = activeTimers[userId] or {}
+    local data = activeTimers[userId]
+
+    -- basic touch cooldown
+    if data.nextTouchAllowed and now < data.nextTouchAllowed then
+        return
+    end
+    data.nextTouchAllowed = now + TOUCH_COOLDOWN
+
+    -- Apply attribute server-side (authoritative)
+    local prev = player:GetAttribute("LuckyMultiplier") or 1
+    player:SetAttribute("LuckyMultiplier", multiplier)
+
+    -- Notify client to show UI
+    remote:FireClient(player, multiplier, duration)
+
+    -- Cancel old timer (if any) so we don't prematurely clear newer buff
+    if data.cancel then
+        -- call cancel which sets a flag in the spawned thread
+        data.cancel()
+        data.cancel = nil
+    end
+
+    if duration and duration > 0 then
+        -- create a cancellable delay so multiple activations don't conflict
+        local cancelled = false
+        data.cancel = function() cancelled = true end
+
+        spawn(function()
+            local target = os.time() + duration
+            while os.time() < target do
+                if cancelled then return end
+                wait(1)
+            end
+            if cancelled then return end
+            -- Only revert if the attribute still equals the multiplier we set.
+            -- This avoids overwriting a stronger/later buff.
+            local cur = player:GetAttribute("LuckyMultiplier") or 1
+            if cur == multiplier then
+                player:SetAttribute("LuckyMultiplier", 1)
+                remote:FireClient(player, 1, 0)
+            end
+            -- clear stored data
+            activeTimers[userId] = nil
+        end)
+    else
+        -- permanent: no timer to clean up
+        activeTimers[userId] = nil
+    end
+end
+
+-- Handle touch on zone parts
+local function onTouched(part, zoneMultiplier, zoneDuration)
+    local character = part.Parent
+    if not character then return end
+    local player = Players:GetPlayerFromCharacter(character)
+    if not player then return end
+    applyMultiplier(player, zoneMultiplier, zoneDuration)
+end
+
+-- Connect zone (BasePart) Touched event
+local function connectZone(zone)
+    if not zone or not zone:IsA("BasePart") then return end
+    -- Using Touched to trigger; you can replace with ProximityPrompt or ClickDetector
+    zone.Touched:Connect(function(part)
+        onTouched(part, MULTIPLIER, DURATION)
+    end)
+end
+
+-- Tag name used in CollectionService
+local TAG = "LuckyZone"
+
+-- Connect existing tagged parts
+for _, zone in ipairs(CollectionService:GetTagged(TAG)) do
+    connectZone(zone)
+end
+
+-- Connect future tagged parts
+CollectionService:GetInstanceAddedSignal(TAG):Connect(function(instance)
+    connectZone(instance)
+end)
+
+-- Optional: clean up attribute on player leave
+Players.PlayerRemoving:Connect(function(player)
+    player:SetAttribute("LuckyMultiplier", nil)
+    activeTimers[player.UserId] = nil
+end)
+
+print("[LuckyZoneServer] Loaded. MULTIPLIER=" .. tostring(MULTIPLIER) .. " DURATION=" .. tostring(DURATION))
