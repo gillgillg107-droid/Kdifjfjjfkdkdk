@@ -1,0 +1,105 @@
+-- LuckyUIClient.lua
+-- Put this in StarterGui (LocalScript)
+-- Waits for ReplicatedStorage.LuckyActivated and shows a small HUD with multiplier + countdown
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local REMOTE_NAME = "LuckyActivated"
+local remote = ReplicatedStorage:WaitForChild(REMOTE_NAME)
+
+-- Create UI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "LuckyUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Name = "Container"
+frame.Size = UDim2.new(0, 260, 0, 84)
+frame.Position = UDim2.new(0.5, -130, 0.08, 0)
+frame.AnchorPoint = Vector2.new(0.5, 0)
+frame.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+frame.BorderSizePixel = 0
+frame.BackgroundTransparency = 0
+frame.Parent = screenGui
+
+local icon = Instance.new("TextLabel")
+icon.Name = "Icon"
+icon.Size = UDim2.new(0,64,0,64)
+icon.Position = UDim2.new(0,8,0.5,-32)
+icon.BackgroundTransparency = 1
+icon.Font = Enum.Font.GothamBold
+icon.TextSize = 24
+icon.TextColor3 = Color3.fromRGB(255, 204, 51)
+icon.Text = "★"
+icon.Parent = frame
+
+local label = Instance.new("TextLabel")
+label.Name = "MultiplierLabel"
+label.Size = UDim2.new(1, -88, 0.6, 0)
+label.Position = UDim2.new(0,80,0,8)
+label.BackgroundTransparency = 1
+label.Font = Enum.Font.GothamBold
+label.TextSize = 24
+label.TextColor3 = Color3.fromRGB(255, 221, 102)
+label.TextXAlignment = Enum.TextXAlignment.Left
+label.Text = ""
+label.Parent = frame
+
+local timerLabel = Instance.new("TextLabel")
+timerLabel.Name = "TimerLabel"
+timerLabel.Size = UDim2.new(1, -88, 0.4, 0)
+timerLabel.Position = UDim2.new(0,80,0.6,0)
+timerLabel.BackgroundTransparency = 1
+timerLabel.Font = Enum.Font.Gotham
+timerLabel.TextSize = 18
+timerLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+timerLabel.TextXAlignment = Enum.TextXAlignment.Left
+timerLabel.Text = ""
+timerLabel.Parent = frame
+
+frame.Visible = false
+
+-- Show/hide logic + countdown
+local active = false
+local remaining = 0
+
+local function formatTime(sec)
+    if sec <= 0 then return "0:00" end
+    local m = math.floor(sec/60)
+    local s = sec % 60
+    return string.format("%d:%02d", m, s)
+end
+
+remote.OnClientEvent:Connect(function(multiplier, duration)
+    if not multiplier or multiplier <= 1 then
+        frame.Visible = false
+        active = false
+        return
+    end
+    label.Text = "Lucky x" .. tostring(multiplier) .. "!"
+    if duration and duration > 0 then
+        remaining = duration
+        timerLabel.Text = formatTime(remaining)
+        frame.Visible = true
+        active = true
+        spawn(function()
+            while active and remaining > 0 do
+                wait(1)
+                remaining = remaining - 1
+                timerLabel.Text = formatTime(remaining)
+            end
+            if active then
+                frame.Visible = false
+                active = false
+            end
+        end)
+    else
+        timerLabel.Text = "Permanent"
+        frame.Visible = true
+        active = true
+    end
+end)
