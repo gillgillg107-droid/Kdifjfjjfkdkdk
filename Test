@@ -1,0 +1,240 @@
+-- LuckyUIClient.lua
+-- Put this in StarterGui (LocalScript)
+-- Waits for ReplicatedStorage.LuckyActivated and shows a small HUD with multiplier + countdown
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local REMOTE_NAME = "LuckyActivated"
+local remote = ReplicatedStorage:WaitForChild(REMOTE_NAME)
+
+-- Create UI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "LuckyUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Name = "Container"
+frame.Size = UDim2.new(0, 260, 0, 84)
+frame.Position = UDim2.new(0.5, -130, 0.08, 0)
+frame.AnchorPoint = Vector2.new(0.5, 0)
+frame.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+frame.BorderSizePixel = 0
+frame.BackgroundTransparency = 0
+frame.Parent = screenGui
+
+local icon = Instance.new("TextLabel")
+icon.Name = "Icon"
+icon.Size = UDim2.new(0,64,0,64)
+icon.Position = UDim2.new(0,8,0.5,-32)
+icon.BackgroundTransparency = 1
+icon.Font = Enum.Font.GothamBold
+icon.TextSize = 24
+icon.TextColor3 = Color3.fromRGB(255, 204, 51)
+icon.Text = "★"
+icon.Parent = frame
+
+local label = Instance.new("TextLabel")
+label.Name = "MultiplierLabel"
+label.Size = UDim2.new(1, -88, 0.6, 0)
+label.Position = UDim2.new(0,80,0,8)
+label.BackgroundTransparency = 1
+label.Font = Enum.Font.GothamBold
+label.TextSize = 24
+label.TextColor3 = Color3.fromRGB(255, 221, 102)
+label.TextXAlignment = Enum.TextXAlignment.Left
+label.Text = ""
+label.Parent = frame
+
+local timerLabel = Instance.new("TextLabel")
+timerLabel.Name = "TimerLabel"
+timerLabel.Size = UDim2.new(1, -88, 0.4, 0)
+timerLabel.Position = UDim2.new(0,80,0.6,0)
+timerLabel.BackgroundTransparency = 1
+timerLabel.Font = Enum.Font.Gotham
+timerLabel.TextSize = 18
+timerLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+timerLabel.TextXAlignment = Enum.TextXAlignment.Left
+timerLabel.Text = ""
+timerLabel.Parent = frame
+
+frame.Visible = false
+
+-- Show/hide logic + countdown
+local active = false
+local remaining = 0
+
+local function formatTime(sec)
+    if sec <= 0 then return "0:00" end
+    local m = math.floor(sec/60)
+    local s = sec % 60
+    return string.format("%d:%02d", m, s)
+end
+
+remote.OnClientEvent:Connect(function(multiplier, duration)
+    if not multiplier or multiplier <= 1 then
+        frame.Visible = false
+        active = false
+        return
+    end
+    label.Text = "Lucky x" .. tostring(multiplier) .. "!"
+    if duration and duration > 0 then
+        remaining = duration
+        timerLabel.Text = formatTime(remaining)
+        frame.Visible = true
+        active = true
+        spawn(function()
+            while active and remaining > 0 do
+                wait(1)
+                remaining = remaining - 1
+                timerLabel.Text = formatTime(remaining)
+            end
+            if active then
+                frame.Visible = false
+                active = false
+            end
+        end)
+    else
+        timerLabel.Text = "Permanent"
+        frame.Visible = true
+        active = true
+    end
+end)
+-- LuckyZoneServer.lua
+-- Put this in ServerScriptService
+-- Requirements: Tag the multiplier parts with the CollectionService tag "LuckyZone"
+-- Config: MULTIPLIER, DURATION (seconds). DURATION = 0 -> permanent
+
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+-- CONFIG
+local MULTIPLIER = 99       -- x99 lucky multiplier
+local DURATION = 300        -- seconds the multiplier lasts (set to 0 for permanent)
+local TOUCH_COOLDOWN = 2    -- seconds between allowed activations per player per zone
+
+local REMOTE_NAME = "LuckyActivated"
+
+-- Ensure remote exists
+local remote = ReplicatedStorage:FindFirstChild(REMOTE_NAME)
+if not remote then
+    remote = Instance.new("RemoteEvent")
+    remote.Name = REMOTE_NAME
+    remote.Parent = ReplicatedStorage
+end
+
+-- Internal state per player
+-- activeTimers[userId] = { cancel = function() end, nextTouchAllowed = os.time()+n }
+local activeTimers = {}
+
+local function applyMultiplier(player, multiplier, duration)
+    if not player or not player.Parent then return end
+    local userId = player.UserId
+    local now = os.time()
+    activeTimers[userId] = activeTimers[userId] or {}
+    local data = activeTimers[userId]
+
+    -- basic touch cooldown
+    if data.nextTouchAllowed and now < data.nextTouchAllowed then
+        return
+    end
+    data.nextTouchAllowed = now + TOUCH_COOLDOWN
+
+    -- Apply attribute server-side (authoritative)
+    local prev = player:GetAttribute("LuckyMultiplier") or 1
+    player:SetAttribute("LuckyMultiplier", multiplier)
+
+    -- Notify client to show UI
+    remote:FireClient(player, multiplier, duration)
+
+    -- Cancel old timer (if any) so we don't prematurely clear newer buff
+    if data.cancel then
+        -- call cancel which sets a flag in the spawned thread
+        data.cancel()
+        data.cancel = nil
+    end
+
+    if duration and duration > 0 then
+        -- create a cancellable delay so multiple activations don't conflict
+        local cancelled = false
+        data.cancel = function() cancelled = true end
+
+        spawn(function()
+            local target = os.time() + duration
+            while os.time() < target do
+                if cancelled then return end
+                wait(1)
+            end
+            if cancelled then return end
+            -- Only revert if the attribute still equals the multiplier we set.
+            -- This avoids overwriting a stronger/later buff.
+            local cur = player:GetAttribute("LuckyMultiplier") or 1
+            if cur == multiplier then
+                player:SetAttribute("LuckyMultiplier", 1)
+                remote:FireClient(player, 1, 0)
+            end
+            -- clear stored data
+            activeTimers[userId] = nil
+        end)
+    else
+        -- permanent: no timer to clean up
+        activeTimers[userId] = nil
+    end
+end
+
+-- Handle touch on zone parts
+local function onTouched(part, zoneMultiplier, zoneDuration)
+    local character = part.Parent
+    if not character then return end
+    local player = Players:GetPlayerFromCharacter(character)
+    if not player then return end
+    applyMultiplier(player, zoneMultiplier, zoneDuration)
+end
+
+-- Connect zone (BasePart) Touched event
+local function connectZone(zone)
+    if not zone or not zone:IsA("BasePart") then return end
+    -- Using Touched to trigger; you can replace with ProximityPrompt or ClickDetector
+    zone.Touched:Connect(function(part)
+        onTouched(part, MULTIPLIER, DURATION)
+    end)
+end
+
+-- Tag name used in CollectionService
+local TAG = "LuckyZone"
+
+-- Connect existing tagged parts
+for _, zone in ipairs(CollectionService:GetTagged(TAG)) do
+    connectZone(zone)
+end
+
+-- Connect future tagged parts
+CollectionService:GetInstanceAddedSignal(TAG):Connect(function(instance)
+    connectZone(instance)
+end)
+
+-- Optional: clean up attribute on player leave
+Players.PlayerRemoving:Connect(function(player)
+    player:SetAttribute("LuckyMultiplier", nil)
+    activeTimers[player.UserId] = nil
+end)
+
+print("[LuckyZoneServer] Loaded. MULTIPLIER=" .. tostring(MULTIPLIER) .. " DURATION=" .. tostring(DURATION))
+-- TagZones.lua (optional): run once in Studio or during startup to add CollectionService tags
+local CollectionService = game:GetService("CollectionService")
+-- Example: tag a part named "LuckyPad1" in Workspace
+local partsToTag = {
+    "LuckyPad1",
+    "LuckyPad2"
+}
+for _, partName in ipairs(partsToTag) do
+    local part = workspace:FindFirstChild(partName, true)
+    if part and part:IsA("BasePart") then
+        CollectionService:AddTag(part, "LuckyZone")
+        print("Tagged", part:GetFullName())
+    end
+end
