@@ -1,0 +1,14 @@
+-- TagZones.lua (optional): run once in Studio or during startup to add CollectionService tags
+local CollectionService = game:GetService("CollectionService")
+-- Example: tag a part named "LuckyPad1" in Workspace
+local partsToTag = {
+    "LuckyPad1",
+    "LuckyPad2"
+}
+for _, partName in ipairs(partsToTag) do
+    local part = workspace:FindFirstChild(partName, true)
+    if part and part:IsA("BasePart") then
+        CollectionService:AddTag(part, "LuckyZone")
+        print("Tagged", part:GetFullName())
+    end
+end
